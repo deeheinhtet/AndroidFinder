@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter pub get:*)",
+      "Bash(dart run build_runner build:*)",
+      "Bash(flutter pub run build_runner build:*)",
+      "Bash(flutter analyze:*)",
+      "Bash(flutter build:*)",
+      "Bash(ls:*)",
+      "Bash(adb devices:*)",
+      "Bash(adb -s 192.168.1.36:36075 shell sh -c:*)",
+      "Bash(adb -s 192.168.1.36:36075 shell ls:*)",
+      "Bash(adb:*)"
+    ]
+  }
+}

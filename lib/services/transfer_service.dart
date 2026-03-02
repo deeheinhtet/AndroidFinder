@@ -1,0 +1,153 @@
+import 'dart:async';
+import 'dart:io';
+import 'package:uuid/uuid.dart';
+import '../core/constants.dart';
+import '../models/transfer_task.dart';
+import 'file_service.dart';
+
+class TransferService {
+  final FileService _fileService;
+  final _uuid = const Uuid();
+  final _tasks = <String, TransferTask>{};
+  final _controller = StreamController<TransferTask>.broadcast();
+  int _activeCount = 0;
+
+  TransferService(this._fileService);
+
+  Stream<TransferTask> get taskUpdates => _controller.stream;
+  List<TransferTask> get allTasks => _tasks.values.toList();
+
+  TransferTask enqueuePull(
+      String serial, String remotePath, String localPath, String fileName) {
+    final task = TransferTask(
+      id: _uuid.v4(),
+      fileName: fileName,
+      sourcePath: remotePath,
+      destinationPath: localPath,
+      direction: TransferDirection.deviceToLocal,
+      status: TransferStatus.queued,
+      totalBytes: 0,
+    );
+    _tasks[task.id] = task;
+    _controller.add(task);
+    _processQueue(serial);
+    return task;
+  }
+
+  TransferTask enqueuePush(
+      String serial, String localPath, String remotePath, String fileName) {
+    final task = TransferTask(
+      id: _uuid.v4(),
+      fileName: fileName,
+      sourcePath: localPath,
+      destinationPath: remotePath,
+      direction: TransferDirection.localToDevice,
+      status: TransferStatus.queued,
+      totalBytes: 0,
+    );
+    _tasks[task.id] = task;
+    _controller.add(task);
+    _processQueue(serial);
+    return task;
+  }
+
+  Future<void> _processQueue(String serial) async {
+    if (_activeCount >= AdbConstants.maxConcurrentTransfers) return;
+
+    final queued = _tasks.values
+        .where((t) => t.status == TransferStatus.queued)
+        .toList();
+
+    for (final task in queued) {
+      if (_activeCount >= AdbConstants.maxConcurrentTransfers) break;
+      _activeCount++;
+
+      // Get source file size before starting
+      int sourceSize = 0;
+      try {
+        if (task.direction == TransferDirection.deviceToLocal) {
+          sourceSize =
+              await _fileService.getFileSize(serial, task.sourcePath);
+        } else {
+          sourceSize = await File(task.sourcePath).length();
+        }
+      } catch (_) {}
+
+      final updated = task.copyWith(
+        status: TransferStatus.inProgress,
+        startedAt: DateTime.now(),
+        totalBytes: sourceSize,
+      );
+      _tasks[task.id] = updated;
+      _controller.add(updated);
+
+      try {
+        void onProgress(int bytesTransferred) {
+          final progressed = updated.copyWith(
+            transferredBytes: bytesTransferred,
+          );
+          _tasks[task.id] = progressed;
+          _controller.add(progressed);
+        }
+
+        if (task.direction == TransferDirection.deviceToLocal) {
+          await _fileService.pullFileWithProgress(
+            serial,
+            task.sourcePath,
+            task.destinationPath,
+            onProgress: onProgress,
+          );
+        } else {
+          await _fileService.pushFileWithProgress(
+            serial,
+            task.sourcePath,
+            task.destinationPath,
+            onProgress: onProgress,
+          );
+        }
+
+        final completed = _tasks[task.id]!.copyWith(
+          status: TransferStatus.completed,
+          completedAt: DateTime.now(),
+          transferredBytes: sourceSize > 0 ? sourceSize : 0,
+        );
+        _tasks[task.id] = completed;
+        _controller.add(completed);
+      } catch (e) {
+        final failed = _tasks[task.id]!.copyWith(
+          status: TransferStatus.failed,
+          errorMessage: e.toString(),
+          completedAt: DateTime.now(),
+        );
+        _tasks[task.id] = failed;
+        _controller.add(failed);
+      } finally {
+        _activeCount--;
+      }
+    }
+
+    if (_tasks.values.any((t) => t.status == TransferStatus.queued)) {
+      _processQueue(serial);
+    }
+  }
+
+  void cancel(String taskId) {
+    final task = _tasks[taskId];
+    if (task != null && task.status == TransferStatus.queued) {
+      final cancelled = task.copyWith(status: TransferStatus.cancelled);
+      _tasks[taskId] = cancelled;
+      _controller.add(cancelled);
+    }
+  }
+
+  void clearCompleted() {
+    _tasks.removeWhere((_, t) =>
+        t.status == TransferStatus.completed ||
+        t.status == TransferStatus.cancelled ||
+        t.status == TransferStatus.failed);
+  }
+
+  void dispose() {
+    _controller.close();
+  }
+}
