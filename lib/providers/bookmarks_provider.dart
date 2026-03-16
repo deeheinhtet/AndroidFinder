@@ -6,23 +6,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 class CustomBookmark {
   final String label;
   final String path;
-  final int iconCode;
 
-  const CustomBookmark({
-    required this.label,
-    required this.path,
-    this.iconCode = 0xe2c7, // folder icon
-  });
+  const CustomBookmark({required this.label, required this.path});
 
-  IconData get icon => IconData(iconCode, fontFamily: 'MaterialIcons');
+  IconData get icon => Icons.bookmark;
 
-  Map<String, dynamic> toJson() =>
-      {'label': label, 'path': path, 'iconCode': iconCode};
+  Map<String, dynamic> toJson() => {'label': label, 'path': path};
 
   factory CustomBookmark.fromJson(Map<String, dynamic> j) => CustomBookmark(
         label: j['label'] as String,
         path: j['path'] as String,
-        iconCode: (j['iconCode'] as int?) ?? 0xe2c7,
       );
 }
 
@@ -63,12 +56,11 @@ class BookmarksNotifier extends StateNotifier<BookmarksState> {
     );
   }
 
-  Future<void> addBookmark(String label, String path,
-      {int iconCode = 0xe2c7}) async {
+  Future<void> addBookmark(String label, String path) async {
     if (state.bookmarks.any((b) => b.path == path)) return;
     final updated = [
       ...state.bookmarks,
-      CustomBookmark(label: label, path: path, iconCode: iconCode),
+      CustomBookmark(label: label, path: path),
     ];
     state = state.copyWith(bookmarks: updated);
     await _save();
