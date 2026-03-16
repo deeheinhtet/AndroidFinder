@@ -10,6 +10,7 @@ class SelectionActionBar extends StatelessWidget {
   final VoidCallback? onDelete;
   final VoidCallback? onDownload;
   final VoidCallback? onUpload;
+  final VoidCallback? onBatchRename;
 
   const SelectionActionBar({
     super.key,
@@ -21,6 +22,7 @@ class SelectionActionBar extends StatelessWidget {
     this.onDelete,
     this.onDownload,
     this.onUpload,
+    this.onBatchRename,
   });
 
   @override
@@ -59,6 +61,12 @@ class SelectionActionBar extends StatelessWidget {
             label: 'None',
             onPressed: onClearSelection,
           ),
+          if (isDevicePanel && selectedCount > 1 && onBatchRename != null)
+            _ActionButton(
+              icon: Icons.drive_file_rename_outline,
+              label: 'Rename',
+              onPressed: onBatchRename,
+            ),
           if (isDevicePanel && onDownload != null)
             _ActionButton(
               icon: Icons.download,

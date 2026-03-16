@@ -10,6 +10,7 @@ class FileToolbar extends StatefulWidget {
   final VoidCallback onRefresh;
   final VoidCallback onHome;
   final VoidCallback onNewFolder;
+  final VoidCallback? onDeviceSearch;
   final bool isDevicePanel;
   final String searchQuery;
   final ValueChanged<String> onSearchChanged;
@@ -29,6 +30,7 @@ class FileToolbar extends StatefulWidget {
     required this.onHome,
     required this.onNewFolder,
     required this.isDevicePanel,
+    this.onDeviceSearch,
     required this.searchQuery,
     required this.onSearchChanged,
     required this.sortField,
@@ -141,6 +143,11 @@ class _FileToolbarState extends State<FileToolbar> {
                       icon: Icons.create_new_folder,
                       tooltip: 'New Folder',
                       onPressed: widget.onNewFolder,
+                    ),
+                    _ToolbarButton(
+                      icon: Icons.manage_search,
+                      tooltip: 'Search Device (Ctrl+Shift+F)',
+                      onPressed: widget.onDeviceSearch,
                     ),
                   ],
                   const SizedBox(width: 8),

@@ -10,7 +10,9 @@
       "Bash(adb devices:*)",
       "Bash(adb -s 192.168.1.36:36075 shell sh -c:*)",
       "Bash(adb -s 192.168.1.36:36075 shell ls:*)",
-      "Bash(adb:*)"
+      "Bash(adb:*)",
+      "Bash(flutter config:*)",
+      "Bash(git:*)"
     ]
   }
 }

@@ -4,10 +4,13 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../models/file_item.dart';
 import '../../models/sort_option.dart';
+import '../../providers/adb_provider.dart';
 import '../../providers/device_file_provider.dart';
 import '../../providers/device_provider.dart';
 import '../../providers/local_file_provider.dart';
 import '../../providers/transfer_provider.dart';
+import 'batch_rename_dialog.dart';
+import 'device_search_dialog.dart';
 import 'file_breadcrumb_bar.dart';
 import 'file_context_menu.dart';
 import 'file_item_tile.dart';
@@ -67,13 +70,17 @@ class FileBrowserPanel extends ConsumerWidget {
       onDragDone: (details) {
         if (!isDevicePanel || serial == null) return;
         for (final file in details.files) {
-          final fileName = file.path.split('/').last;
-          ref.read(transferProvider.notifier).enqueueUpload(
-                serial,
-                file.path,
-                '$currentPath/$fileName',
-                fileName,
-              );
+          if (file.path.toLowerCase().endsWith('.apk')) {
+            _installApkFile(context, ref, serial, file.path);
+          } else {
+            final fileName = file.path.split('/').last;
+            ref.read(transferProvider.notifier).enqueueUpload(
+                  serial,
+                  file.path,
+                  '$currentPath/$fileName',
+                  fileName,
+                );
+          }
         }
       },
       child: Column(
@@ -100,6 +107,12 @@ class FileBrowserPanel extends ConsumerWidget {
             sortAscending: sortAscending,
             onSortChanged: (f) => _setSort(ref, serial, f),
             searchFocusTrigger: searchFocusTrigger,
+            onDeviceSearch: isDevicePanel && serial != null
+                ? () => showDialog(
+                      context: context,
+                      builder: (_) => DeviceSearchDialog(serial: serial),
+                    )
+                : null,
           ),
           if (errorMessage != null)
             Container(
@@ -144,8 +157,17 @@ class FileBrowserPanel extends ConsumerWidget {
                           ],
                         ),
                       )
-                    : _buildDragTarget(context, ref, serial, displayFiles,
-                        selectedFiles, currentPath),
+                    : _buildDragTarget(
+                        context,
+                        ref,
+                        serial,
+                        displayFiles,
+                        selectedFiles,
+                        currentPath,
+                        isDevicePanel && devState != null
+                            ? devState.directorySizes
+                            : null,
+                      ),
           ),
           // Selection action bar
           if (selectedFiles.isNotEmpty)
@@ -180,14 +202,38 @@ class FileBrowserPanel extends ConsumerWidget {
                   ? () => _uploadSelected(ref, serial, displayFiles,
                       selectedFiles)
                   : null,
+              onBatchRename: isDevicePanel &&
+                      serial != null &&
+                      selectedFiles.length > 1
+                  ? () {
+                      final state = ref.read(deviceFileProvider(serial));
+                      final items = state.files
+                          .where((f) =>
+                              state.selectedFiles.contains(f.absolutePath))
+                          .toList();
+                      showDialog(
+                        context: context,
+                        builder: (_) => BatchRenameDialog(
+                          selectedItems: items,
+                          serial: serial,
+                        ),
+                      );
+                    }
+                  : null,
             ),
         ],
       ),
     );
   }
 
-  Widget _buildDragTarget(BuildContext context, WidgetRef ref, String? serial,
-      List<FileItem> files, Set<String> selectedFiles, String currentPath) {
+  Widget _buildDragTarget(
+      BuildContext context,
+      WidgetRef ref,
+      String? serial,
+      List<FileItem> files,
+      Set<String> selectedFiles,
+      String currentPath,
+      Map<String, int>? directorySizes) {
     return DragTarget<List<FileItem>>(
       onAcceptWithDetails: (details) {
         final droppedItems = details.data;
@@ -282,6 +328,7 @@ class FileBrowserPanel extends ConsumerWidget {
                   child: FileItemTile(
                     file: file,
                     isSelected: isSelected,
+                    calculatedSize: directorySizes?[file.absolutePath],
                     onTap: () => _toggleSelect(ref, serial, file),
                     onDoubleTap: () {
                       if (file.isDirectory) {
@@ -405,35 +452,72 @@ class FileBrowserPanel extends ConsumerWidget {
 
   void _confirmDeleteSelected(
       BuildContext context, WidgetRef ref, String serial) {
-    final count = isDevicePanel
-        ? ref.read(deviceFileProvider(serial)).selectedFiles.length
-        : 0;
+    final count = ref.read(deviceFileProvider(serial)).selectedFiles.length;
+    ref.read(deviceFileProvider(serial).notifier).scheduleDeletion();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Deleting $count item(s) in 5 seconds...'),
+        duration: const Duration(seconds: 5),
+        behavior: SnackBarBehavior.floating,
+        width: 350,
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () {
+            ref.read(deviceFileProvider(serial).notifier).cancelDeletion();
+          },
+        ),
+      ),
+    );
+  }
+
+  void _installApkFile(
+      BuildContext context, WidgetRef ref, String serial, String apkPath) {
+    final adb = ref.read(adbServiceProvider);
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete'),
-        content: Text(
-            'Are you sure you want to delete $count selected item(s)?\n'
-            'This action cannot be undone.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              ref
-                  .read(deviceFileProvider(serial).notifier)
-                  .deleteSelected();
-              Navigator.of(context).pop();
-            },
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return FutureBuilder(
+          future: adb.installApk(serial, apkPath),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const AlertDialog(
+                content: Row(
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(width: 16),
+                    Expanded(child: Text('Installing APK...')),
+                  ],
+                ),
+              );
+            }
+            final success = snapshot.error == null;
+            return AlertDialog(
+              content: Row(
+                children: [
+                  Icon(
+                    success ? Icons.check_circle : Icons.error,
+                    color: success ? Colors.green : Colors.red,
+                    size: 24,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(success
+                        ? 'APK installed successfully'
+                        : 'Installation failed: ${snapshot.error}'),
+                  ),
+                ],
+              ),
+              actions: [
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Done'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 

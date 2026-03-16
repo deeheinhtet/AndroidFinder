@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import '../core/constants.dart';
 import '../models/file_item.dart';
@@ -211,5 +212,63 @@ class FileService {
   Future<int> getFileSize(String serial, String path) async {
     final output = await _adb.shell(serial, ['stat', '-c', '%s', path]);
     return int.tryParse(output.trim()) ?? 0;
+  }
+
+  Future<bool> fileExistsOnDevice(String serial, String path) async {
+    try {
+      final output = await _adb
+          .shell(serial, ['test', '-e', path, '&&', 'echo', '1', '||', 'echo', '0']);
+      return output.trim() == '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> fileExistsLocally(String path) async {
+    return File(path).exists();
+  }
+
+  Future<int> getDirectorySize(String serial, String path) async {
+    try {
+      final output = await _adb.shell(serial, ['du', '-sk', path]);
+      final parts = output.trim().split('\t');
+      final kb = int.tryParse(parts.first.trim()) ?? 0;
+      return kb * 1024;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  Stream<String> findFiles(String serial, String root, String pattern) async* {
+    try {
+      final adbPath = await _adb.getAdbPath();
+      final process = await Process.start(adbPath, [
+        '-s',
+        serial,
+        'shell',
+        'find',
+        root,
+        '-iname',
+        '*$pattern*',
+        '-not',
+        '-path',
+        '*/proc/*',
+        '-not',
+        '-path',
+        '*/sys/*',
+      ]);
+      int count = 0;
+      await for (final line in process.stdout
+          .transform(const SystemEncoding().decoder)
+          .transform(const LineSplitter())) {
+        final trimmed = line.trim();
+        if (trimmed.isNotEmpty && !trimmed.startsWith('find:')) {
+          yield trimmed;
+          count++;
+          if (count >= 500) break;
+        }
+      }
+      process.kill();
+    } catch (_) {}
   }
 }

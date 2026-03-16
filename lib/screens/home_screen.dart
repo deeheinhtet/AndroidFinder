@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:file_picker/file_picker.dart';
+import '../providers/clipboard_provider.dart';
 import '../providers/device_file_provider.dart';
 import '../providers/device_provider.dart';
 import '../providers/local_file_provider.dart';
+import '../providers/transfer_provider.dart';
 import '../widgets/device_panel/device_status_bar.dart';
 import '../widgets/device_panel/quick_access_sidebar.dart';
+import '../widgets/file_browser/conflict_resolution_dialog.dart';
+import '../widgets/file_browser/device_search_dialog.dart';
 import '../widgets/file_browser/file_browser_panel.dart';
 import '../widgets/transfer/transfer_panel.dart';
 import 'device_selector_screen.dart';
@@ -27,6 +32,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(localFileProvider.notifier).refresh();
+      // Set up conflict resolver
+      ref.read(transferProvider.notifier).setConflictResolver(
+        (fileName, sourceBytes, destBytes) async {
+          if (!mounted) return ConflictResolution.skip;
+          final result = await showDialog<ConflictResolution>(
+            context: context,
+            builder: (_) => ConflictResolutionDialog(
+              fileName: fileName,
+              sourceBytes: sourceBytes,
+              destBytes: destBytes,
+            ),
+          );
+          return result ?? ConflictResolution.skip;
+        },
+      );
     });
   }
 
@@ -62,12 +82,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               _selectAll(),
           const SingleActivator(LogicalKeyboardKey.keyF, control: true): () =>
               _focusSearch(),
+          const SingleActivator(LogicalKeyboardKey.keyF,
+              control: true, shift: true): () => _deviceSearch(context),
           const SingleActivator(LogicalKeyboardKey.delete): () =>
               _deleteSelected(context),
-          const SingleActivator(LogicalKeyboardKey.escape): () =>
-              _clearAll(),
+          const SingleActivator(LogicalKeyboardKey.escape): () => _clearAll(),
           const SingleActivator(LogicalKeyboardKey.enter): () =>
               _openSelectedFolder(),
+          const SingleActivator(LogicalKeyboardKey.keyC, control: true): () =>
+              _copySelected(),
+          const SingleActivator(LogicalKeyboardKey.keyV, control: true): () =>
+              _pasteClipboard(),
+          const SingleActivator(LogicalKeyboardKey.keyD, control: true): () =>
+              _downloadSelectedFiles(context),
+          const SingleActivator(LogicalKeyboardKey.keyU, control: true): () =>
+              _uploadSelectedFiles(),
         },
         child: Focus(
           autofocus: true,
@@ -189,34 +218,134 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (serial == null) return;
     final selected = ref.read(deviceFileProvider(serial)).selectedFiles;
     if (selected.isEmpty) return;
+    _scheduleDelete(context, serial, selected.length);
+  }
 
+  void _scheduleDelete(BuildContext context, String serial, int count) {
+    ref.read(deviceFileProvider(serial).notifier).scheduleDeletion();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Deleting $count item(s) in 5 seconds...'),
+        duration: const Duration(seconds: 5),
+        behavior: SnackBarBehavior.floating,
+        width: 350,
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () {
+            ref.read(deviceFileProvider(serial).notifier).cancelDeletion();
+          },
+        ),
+      ),
+    );
+  }
+
+  void _copySelected() {
+    final deviceState = ref.read(deviceProvider);
+    final serial = deviceState.activeSerial;
+    if (serial != null) {
+      final devState = ref.read(deviceFileProvider(serial));
+      if (devState.selectedFiles.isNotEmpty) {
+        final items = devState.files
+            .where((f) => devState.selectedFiles.contains(f.absolutePath))
+            .toList();
+        ref
+            .read(clipboardProvider.notifier)
+            .copy(items, true, serial, devState.currentPath);
+        return;
+      }
+    }
+    final locState = ref.read(localFileProvider);
+    if (locState.selectedFiles.isNotEmpty) {
+      final items = locState.files
+          .where((f) => locState.selectedFiles.contains(f.absolutePath))
+          .toList();
+      ref
+          .read(clipboardProvider.notifier)
+          .copy(items, false, null, locState.currentPath);
+    }
+  }
+
+  void _pasteClipboard() {
+    final clipboard = ref.read(clipboardProvider);
+    if (!clipboard.hasItems) return;
+    final deviceState = ref.read(deviceProvider);
+    final serial = deviceState.activeSerial;
+    if (clipboard.isFromDevice && serial != null) {
+      // pasting device files → local panel
+      final localPath = ref.read(localFileProvider).currentPath;
+      for (final item in clipboard.items) {
+        if (!item.isDirectory) {
+          ref.read(transferProvider.notifier).enqueueDownload(
+                serial,
+                item.absolutePath,
+                '$localPath/${item.name}',
+                item.name,
+              );
+        }
+      }
+    } else if (!clipboard.isFromDevice && serial != null) {
+      // pasting local files → device panel
+      final devicePath = ref.read(deviceFileProvider(serial)).currentPath;
+      for (final item in clipboard.items) {
+        if (!item.isDirectory) {
+          ref.read(transferProvider.notifier).enqueueUpload(
+                serial,
+                item.absolutePath,
+                '$devicePath/${item.name}',
+                item.name,
+              );
+        }
+      }
+    }
+  }
+
+  Future<void> _downloadSelectedFiles(BuildContext context) async {
+    final deviceState = ref.read(deviceProvider);
+    final serial = deviceState.activeSerial;
+    if (serial == null) return;
+    final devState = ref.read(deviceFileProvider(serial));
+    if (devState.selectedFiles.isEmpty) return;
+    final dir = await FilePicker.platform.getDirectoryPath();
+    if (dir == null) return;
+    for (final file in devState.files) {
+      if (devState.selectedFiles.contains(file.absolutePath) &&
+          !file.isDirectory) {
+        ref.read(transferProvider.notifier).enqueueDownload(
+              serial,
+              file.absolutePath,
+              '$dir/${file.name}',
+              file.name,
+            );
+      }
+    }
+  }
+
+  void _uploadSelectedFiles() {
+    final deviceState = ref.read(deviceProvider);
+    final serial = deviceState.activeSerial;
+    if (serial == null) return;
+    final locState = ref.read(localFileProvider);
+    if (locState.selectedFiles.isEmpty) return;
+    final devicePath = ref.read(deviceFileProvider(serial)).currentPath;
+    for (final file in locState.files) {
+      if (locState.selectedFiles.contains(file.absolutePath) &&
+          !file.isDirectory) {
+        ref.read(transferProvider.notifier).enqueueUpload(
+              serial,
+              file.absolutePath,
+              '$devicePath/${file.name}',
+              file.name,
+            );
+      }
+    }
+  }
+
+  void _deviceSearch(BuildContext context) {
+    final serial = ref.read(deviceProvider).activeSerial;
+    if (serial == null) return;
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete'),
-        content: Text(
-          'Are you sure you want to delete ${selected.length} selected item(s)?\n'
-          'This action cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              ref
-                  .read(deviceFileProvider(serial).notifier)
-                  .deleteSelected();
-              Navigator.of(context).pop();
-            },
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+      builder: (_) => DeviceSearchDialog(serial: serial),
     );
   }
 

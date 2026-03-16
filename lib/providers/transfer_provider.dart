@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../core/conflict_resolution.dart';
 import '../models/transfer_task.dart';
 import '../services/transfer_service.dart';
 import 'adb_provider.dart';
@@ -78,6 +79,13 @@ class TransferNotifier extends StateNotifier<TransferState> {
               t.status == TransferStatus.queued)
           .toList(),
     );
+  }
+
+  void setConflictResolver(
+      Future<ConflictResolution> Function(
+              String fileName, int? sourceBytes, int? destBytes)?
+          resolver) {
+    _transferService.setConflictResolver(resolver);
   }
 
   @override

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -143,6 +144,28 @@ void showFileContextMenu({
           child: const _MenuTile(Icons.install_mobile, 'Install on Device'),
           onTap: () {
             _installApk(context, ref, serial, file.absolutePath);
+          },
+        ),
+
+      // Install APK from device (device-side .apk file)
+      if (isDevicePanel &&
+          serial != null &&
+          file.name.toLowerCase().endsWith('.apk'))
+        PopupMenuItem(
+          child: const _MenuTile(Icons.install_mobile, 'Install APK'),
+          onTap: () {
+            _installApkFromDevice(context, ref, serial, file);
+          },
+        ),
+
+      // Calculate Size (device directories)
+      if (isDevicePanel && serial != null && file.isDirectory)
+        PopupMenuItem(
+          child: const _MenuTile(Icons.data_usage, 'Calculate Size'),
+          onTap: () {
+            ref
+                .read(deviceFileProvider(serial).notifier)
+                .loadDirectorySize(file.absolutePath);
           },
         ),
 
@@ -325,22 +348,93 @@ void _installApk(
                 ),
               );
             }
-            // Auto-close dialog and show result
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              Navigator.of(dialogContext).pop();
-              final success = snapshot.error == null;
-              ScaffoldMessenger.of(dialogContext).showSnackBar(
-                SnackBar(
-                  content: Text(success
-                      ? 'APK installed successfully'
-                      : 'Installation failed: ${snapshot.error}'),
-                  behavior: SnackBarBehavior.floating,
-                  width: 350,
-                  duration: const Duration(seconds: 3),
+            final success = snapshot.error == null;
+            return AlertDialog(
+              content: Row(
+                children: [
+                  Icon(
+                    success ? Icons.check_circle : Icons.error,
+                    color: success ? Colors.green : Colors.red,
+                    size: 24,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(success
+                        ? 'APK installed successfully'
+                        : 'Installation failed: ${snapshot.error}'),
+                  ),
+                ],
+              ),
+              actions: [
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Done'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  });
+}
+
+void _installApkFromDevice(
+    BuildContext context, WidgetRef ref, String serial, FileItem file) {
+  WidgetsBinding.instance.addPostFrameCallback((_) async {
+    final adb = ref.read(adbServiceProvider);
+    final fileService = ref.read(fileServiceProvider);
+    final tmpDir = Directory.systemTemp.createTempSync('apk_install_');
+    final localPath = '${tmpDir.path}/${file.name}';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return FutureBuilder(
+          future: () async {
+            await fileService.pullFile(serial, file.absolutePath, localPath);
+            await adb.installApk(serial, localPath);
+            try {
+              tmpDir.deleteSync(recursive: true);
+            } catch (_) {}
+          }(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const AlertDialog(
+                content: Row(
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(width: 16),
+                    Expanded(child: Text('Installing APK from device...')),
+                  ],
                 ),
               );
-            });
-            return const SizedBox.shrink();
+            }
+            final success = snapshot.error == null;
+            return AlertDialog(
+              content: Row(
+                children: [
+                  Icon(
+                    success ? Icons.check_circle : Icons.error,
+                    color: success ? Colors.green : Colors.red,
+                    size: 24,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(success
+                        ? 'APK installed successfully'
+                        : 'Installation failed: ${snapshot.error}'),
+                  ),
+                ],
+              ),
+              actions: [
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Done'),
+                ),
+              ],
+            );
           },
         );
       },
@@ -351,36 +445,26 @@ void _installApk(
 void _showDeleteDialog(
     BuildContext context, WidgetRef ref, String serial, FileItem file) {
   WidgetsBinding.instance.addPostFrameCallback((_) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete'),
-        content: Text(
-          'Are you sure you want to delete "${file.name}"?\n'
-          'This action cannot be undone.',
+    // Ensure file is selected, then schedule deletion
+    final notifier = ref.read(deviceFileProvider(serial).notifier);
+    final currentSelected =
+        ref.read(deviceFileProvider(serial)).selectedFiles;
+    if (!currentSelected.contains(file.absolutePath)) {
+      notifier.toggleSelect(file.absolutePath);
+    }
+    notifier.scheduleDeletion();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Deleting "${file.name}" in 5 seconds...'),
+        duration: const Duration(seconds: 5),
+        behavior: SnackBarBehavior.floating,
+        width: 350,
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () {
+            ref.read(deviceFileProvider(serial).notifier).cancelDeletion();
+          },
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              // Select this file and delete
-              ref
-                  .read(deviceFileProvider(serial).notifier)
-                  .toggleSelect(file.absolutePath);
-              ref
-                  .read(deviceFileProvider(serial).notifier)
-                  .deleteSelected();
-              Navigator.of(context).pop();
-            },
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
       ),
     );
   });

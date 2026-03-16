@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:uuid/uuid.dart';
 import '../core/constants.dart';
+import '../core/conflict_resolution.dart';
 import '../models/transfer_task.dart';
 import 'file_service.dart';
 
@@ -12,7 +13,17 @@ class TransferService {
   final _controller = StreamController<TransferTask>.broadcast();
   int _activeCount = 0;
 
+  Future<ConflictResolution> Function(
+      String fileName, int? sourceBytes, int? destBytes)? _conflictResolver;
+
   TransferService(this._fileService);
+
+  void setConflictResolver(
+      Future<ConflictResolution> Function(
+              String fileName, int? sourceBytes, int? destBytes)?
+          resolver) {
+    _conflictResolver = resolver;
+  }
 
   Stream<TransferTask> get taskUpdates => _controller.stream;
   List<TransferTask> get allTasks => _tasks.values.toList();
@@ -73,7 +84,51 @@ class TransferService {
         }
       } catch (_) {}
 
-      final updated = task.copyWith(
+      // Check for file conflicts
+      if (_conflictResolver != null) {
+        bool destExists = false;
+        try {
+          if (task.direction == TransferDirection.deviceToLocal) {
+            destExists =
+                await _fileService.fileExistsLocally(task.destinationPath);
+          } else {
+            destExists = await _fileService.fileExistsOnDevice(
+                serial, task.destinationPath);
+          }
+        } catch (_) {}
+
+        if (destExists) {
+          final resolution = await _conflictResolver!(
+              task.fileName, sourceSize > 0 ? sourceSize : null, null);
+          if (resolution == ConflictResolution.skip) {
+            final cancelled =
+                task.copyWith(status: TransferStatus.cancelled);
+            _tasks[task.id] = cancelled;
+            _controller.add(cancelled);
+            _activeCount--;
+            continue;
+          } else if (resolution == ConflictResolution.renameDestination) {
+            final dest = task.destinationPath;
+            final lastDot = dest.lastIndexOf('.');
+            final lastSlash = dest.lastIndexOf('/');
+            String newDest;
+            if (lastDot > lastSlash && lastDot >= 0) {
+              newDest =
+                  '${dest.substring(0, lastDot)}_copy${dest.substring(lastDot)}';
+            } else {
+              newDest = '${dest}_copy';
+            }
+            final renamedTask = task.copyWith(destinationPath: newDest);
+            _tasks[task.id] = renamedTask;
+          }
+          // overwrite: just proceed normally
+        }
+      }
+
+      // Use possibly-updated task from _tasks map
+      final currentTask = _tasks[task.id]!;
+
+      final updated = currentTask.copyWith(
         status: TransferStatus.inProgress,
         startedAt: DateTime.now(),
         totalBytes: sourceSize,
@@ -90,18 +145,18 @@ class TransferService {
           _controller.add(progressed);
         }
 
-        if (task.direction == TransferDirection.deviceToLocal) {
+        if (currentTask.direction == TransferDirection.deviceToLocal) {
           await _fileService.pullFileWithProgress(
             serial,
-            task.sourcePath,
-            task.destinationPath,
+            currentTask.sourcePath,
+            updated.destinationPath,
             onProgress: onProgress,
           );
         } else {
           await _fileService.pushFileWithProgress(
             serial,
-            task.sourcePath,
-            task.destinationPath,
+            currentTask.sourcePath,
+            updated.destinationPath,
             onProgress: onProgress,
           );
         }

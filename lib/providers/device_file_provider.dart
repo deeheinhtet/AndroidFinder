@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/constants.dart';
 import '../models/file_item.dart';
@@ -16,6 +17,8 @@ class DeviceFileState {
   final String searchQuery;
   final SortField sortField;
   final bool sortAscending;
+  final Map<String, int> directorySizes;
+  final Set<String>? pendingDeletePaths;
 
   const DeviceFileState({
     this.currentPath = AdbConstants.defaultDevicePath,
@@ -28,6 +31,8 @@ class DeviceFileState {
     this.searchQuery = '',
     this.sortField = SortField.name,
     this.sortAscending = true,
+    this.directorySizes = const {},
+    this.pendingDeletePaths,
   });
 
   DeviceFileState copyWith({
@@ -42,6 +47,9 @@ class DeviceFileState {
     SortField? sortField,
     bool? sortAscending,
     bool clearError = false,
+    Map<String, int>? directorySizes,
+    Set<String>? pendingDeletePaths,
+    bool clearPendingDelete = false,
   }) {
     return DeviceFileState(
       currentPath: currentPath ?? this.currentPath,
@@ -54,6 +62,9 @@ class DeviceFileState {
       searchQuery: searchQuery ?? this.searchQuery,
       sortField: sortField ?? this.sortField,
       sortAscending: sortAscending ?? this.sortAscending,
+      directorySizes: directorySizes ?? this.directorySizes,
+      pendingDeletePaths:
+          clearPendingDelete ? null : (pendingDeletePaths ?? this.pendingDeletePaths),
     );
   }
 
@@ -111,9 +122,16 @@ class DeviceFileState {
 class DeviceFileNotifier extends StateNotifier<DeviceFileState> {
   final FileService _fileService;
   final String _serial;
+  Timer? _deletionTimer;
 
   DeviceFileNotifier(this._fileService, this._serial)
       : super(const DeviceFileState());
+
+  @override
+  void dispose() {
+    _deletionTimer?.cancel();
+    super.dispose();
+  }
 
   Future<void> navigateTo(String path) async {
     state = state.copyWith(
@@ -248,6 +266,63 @@ class DeviceFileNotifier extends StateNotifier<DeviceFileState> {
   Future<void> createDirectory(String name) async {
     final path = '${state.currentPath}/$name';
     await _fileService.createDirectory(_serial, path);
+    await refresh();
+  }
+
+  Future<void> batchRename(
+    List<FileItem> items,
+    String prefix,
+    int startIndex,
+    int padWidth,
+  ) async {
+    for (int i = 0; i < items.length; i++) {
+      final item = items[i];
+      final ext = item.name.contains('.') && !item.isDirectory
+          ? '.${item.name.split('.').last}'
+          : '';
+      final num = (startIndex + i).toString().padLeft(padWidth, '0');
+      final newName = '$prefix$num$ext';
+      final parts = item.absolutePath.split('/');
+      parts.removeLast();
+      final newPath = '${parts.join('/')}/$newName';
+      await _fileService.rename(_serial, item.absolutePath, newPath);
+    }
+    await refresh();
+  }
+
+  Future<void> loadDirectorySize(String path) async {
+    try {
+      final size = await _fileService.getDirectorySize(_serial, path);
+      final newSizes = Map<String, int>.from(state.directorySizes);
+      newSizes[path] = size;
+      state = state.copyWith(directorySizes: newSizes);
+    } catch (_) {}
+  }
+
+  Future<void> scheduleDeletion() async {
+    final toDelete = Set<String>.from(state.selectedFiles);
+    if (toDelete.isEmpty) return;
+    state = state.copyWith(pendingDeletePaths: toDelete, selectedFiles: {});
+    _deletionTimer = Timer(const Duration(seconds: 5), () async {
+      await _executeDelete(toDelete);
+    });
+  }
+
+  void cancelDeletion() {
+    _deletionTimer?.cancel();
+    _deletionTimer = null;
+    final toRestore = state.pendingDeletePaths ?? {};
+    state = state.copyWith(
+      selectedFiles: toRestore,
+      clearPendingDelete: true,
+    );
+  }
+
+  Future<void> _executeDelete(Set<String> paths) async {
+    state = state.copyWith(clearPendingDelete: true);
+    for (final path in paths) {
+      await _fileService.delete(_serial, path);
+    }
     await refresh();
   }
 }

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../providers/bookmarks_provider.dart';
 import '../../providers/device_file_provider.dart';
+import 'add_bookmark_dialog.dart';
 
 class QuickAccessSidebar extends ConsumerStatefulWidget {
   final String serial;
@@ -29,6 +31,7 @@ class _QuickAccessSidebarState extends ConsumerState<QuickAccessSidebar> {
     final currentPath = ref.watch(
       deviceFileProvider(widget.serial).select((s) => s.currentPath),
     );
+    final customBookmarks = ref.watch(bookmarksProvider).bookmarks;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
@@ -61,16 +64,95 @@ class _QuickAccessSidebarState extends ConsumerState<QuickAccessSidebar> {
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 4),
-                children: _bookmarks.map((b) {
-                  final isActive = currentPath == b.path;
-                  return _BookmarkButton(
-                    bookmark: b,
-                    isActive: isActive,
-                    onTap: () => ref
-                        .read(deviceFileProvider(widget.serial).notifier)
-                        .navigateTo(b.path),
-                  );
-                }).toList(),
+                children: [
+                  ..._bookmarks.map((b) {
+                    final isActive = currentPath == b.path;
+                    return _BookmarkButton(
+                      bookmark: b,
+                      isActive: isActive,
+                      onTap: () => ref
+                          .read(deviceFileProvider(widget.serial).notifier)
+                          .navigateTo(b.path),
+                    );
+                  }),
+                  if (customBookmarks.isNotEmpty)
+                    Divider(
+                      height: 8,
+                      color: theme.colorScheme.outline.withOpacity(0.1),
+                    ),
+                  ...customBookmarks.map((b) {
+                    final isActive = currentPath == b.path;
+                    return Tooltip(
+                      message: b.path,
+                      child: GestureDetector(
+                        onLongPress: () {
+                          ref
+                              .read(bookmarksProvider.notifier)
+                              .removeBookmark(b.path);
+                        },
+                        child: InkWell(
+                          onTap: () => ref
+                              .read(deviceFileProvider(widget.serial).notifier)
+                              .navigateTo(b.path),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            decoration: BoxDecoration(
+                              color: isActive
+                                  ? theme.colorScheme.primaryContainer
+                                      .withOpacity(0.5)
+                                  : null,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  b.icon,
+                                  size: 18,
+                                  color: isActive
+                                      ? theme.colorScheme.primary
+                                      : theme.colorScheme.onSurface
+                                          .withOpacity(0.6),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  b.label,
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    color: isActive
+                                        ? theme.colorScheme.primary
+                                        : theme.colorScheme.onSurface
+                                            .withOpacity(0.6),
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+            // Add bookmark button
+            InkWell(
+              onTap: () {
+                showDialog(
+                  context: context,
+                  builder: (_) =>
+                      AddBookmarkDialog(currentPath: currentPath),
+                );
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Icon(
+                  Icons.add,
+                  size: 16,
+                  color: theme.colorScheme.onSurface.withOpacity(0.5),
+                ),
               ),
             ),
           ],

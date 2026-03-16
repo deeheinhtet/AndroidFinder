@@ -8,6 +8,7 @@ class FileItemTile extends StatelessWidget {
   final bool isSelected;
   final VoidCallback onTap;
   final VoidCallback onDoubleTap;
+  final int? calculatedSize;
 
   const FileItemTile({
     super.key,
@@ -15,6 +16,7 @@ class FileItemTile extends StatelessWidget {
     required this.isSelected,
     required this.onTap,
     required this.onDoubleTap,
+    this.calculatedSize,
   });
 
   @override
@@ -63,7 +65,11 @@ class FileItemTile extends StatelessWidget {
                 SizedBox(
                   width: 80,
                   child: Text(
-                    file.isDirectory ? '--' : FileSizeFormatter.format(file.sizeBytes),
+                    file.isDirectory
+                        ? (calculatedSize != null
+                            ? FileSizeFormatter.format(calculatedSize!)
+                            : '--')
+                        : FileSizeFormatter.format(file.sizeBytes),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurface.withOpacity(0.5),
                     ),
