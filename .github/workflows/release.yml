@@ -1,0 +1,75 @@
+name: Build & Release macOS DMG
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v1.0.0)'
+        required: true
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build macOS release
+        run: flutter build macos --release
+
+      - name: Ad-hoc code sign
+        run: |
+          APP_PATH=$(find build/macos/Build/Products/Release -name "*.app" -maxdepth 1 | head -1)
+          echo "Found app: $APP_PATH"
+          codesign --force --deep --sign - "$APP_PATH"
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create DMG
+        run: |
+          APP_PATH=$(find build/macos/Build/Products/Release -name "*.app" -maxdepth 1 | head -1)
+          APP_NAME=$(basename "$APP_PATH" .app)
+          VERSION="${{ github.ref_name || inputs.version }}"
+          DMG_NAME="AndroidFinder-${VERSION}.dmg"
+
+          create-dmg \
+            --volname "AndroidFinder" \
+            --window-pos 200 120 \
+            --window-size 600 300 \
+            --icon-size 100 \
+            --icon "${APP_NAME}.app" 175 120 \
+            --hide-extension "${APP_NAME}.app" \
+            --app-drop-link 425 120 \
+            "$DMG_NAME" \
+            "build/macos/Build/Products/Release/"
+
+          echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AndroidFinder ${{ github.ref_name || inputs.version }}
+          tag_name: ${{ github.ref_name || inputs.version }}
+          files: ${{ env.DMG_NAME }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name || inputs.version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
