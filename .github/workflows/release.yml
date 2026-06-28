@@ -74,7 +74,9 @@ jobs:
   # Windows: setup.exe (Inno Setup) + portable .zip
   # ---------------------------------------------------------------------------
   build-windows:
-    runs-on: windows-latest
+    # Pinned to 2022: Flutter 3.19.6 predates the VS2022/Windows SDK on the
+    # newer windows-latest (Server 2025) image and fails to build there.
+    runs-on: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v4
