@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AndroidFinder
+GenericName=Android File Manager
+Comment=Browse and transfer files between your computer and Android devices over ADB
+Exec=android_finder
+Icon=android_finder
+Terminal=false
+Categories=Utility;FileTools;FileManager;
+Keywords=android;adb;file;transfer;device;

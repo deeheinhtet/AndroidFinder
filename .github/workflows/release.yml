@@ -1,4 +1,4 @@
-name: Build & Release macOS DMG
+name: Build & Release
 
 on:
   push:
@@ -11,11 +11,11 @@ on:
         required: true
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # macOS: .dmg (ad-hoc signed)
+  # ---------------------------------------------------------------------------
   build-macos:
     runs-on: macos-latest
-    permissions:
-      contents: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,10 +44,13 @@ jobs:
 
       - name: Create DMG
         run: |
+          VERSION="${{ inputs.version || github.ref_name }}"
           APP_PATH=$(find build/macos/Build/Products/Release -name "*.app" -maxdepth 1 | head -1)
           APP_NAME=$(basename "$APP_PATH" .app)
-          VERSION="${{ github.ref_name || inputs.version }}"
-          DMG_NAME="AndroidFinder-${VERSION}.dmg"
+          DMG_NAME="AndroidFinder-${VERSION}-macos.dmg"
+
+          mkdir -p dmg-stage
+          cp -R "$APP_PATH" dmg-stage/
 
           create-dmg \
             --volname "AndroidFinder" \
@@ -58,18 +61,166 @@ jobs:
             --hide-extension "${APP_NAME}.app" \
             --app-drop-link 425 120 \
             "$DMG_NAME" \
-            "build/macos/Build/Products/Release/"
+            "dmg-stage/"
 
-          echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: AndroidFinder-*-macos.dmg
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Windows: setup.exe (Inno Setup) + portable .zip
+  # ---------------------------------------------------------------------------
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version || github.ref_name }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "numeric=${VERSION#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create portable zip
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.ver.outputs.version }}"
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" `
+            -DestinationPath "AndroidFinder-$ver-windows-portable.zip"
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $num = "${{ steps.ver.outputs.numeric }}"
+          & "iscc" "/DMyAppVersion=$num" "windows/packaging/installer.iss"
+          $ver = "${{ steps.ver.outputs.version }}"
+          Move-Item "windows/packaging/installer_output/AndroidFinder-Setup.exe" `
+            "AndroidFinder-$ver-windows-setup.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            AndroidFinder-*-windows-setup.exe
+            AndroidFinder-*-windows-portable.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Linux: AppImage + .tar.gz
+  # ---------------------------------------------------------------------------
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Linux release
+        run: flutter build linux --release
+
+      - name: Resolve version
+        id: ver
+        run: echo "version=${{ inputs.version || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Create tar.gz
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          tar -czf "AndroidFinder-${VERSION}-linux-x86_64.tar.gz" \
+            -C build/linux/x64/release/bundle .
+
+      - name: Build AppImage
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+
+          # Assemble AppDir
+          mkdir -p AppDir/usr/bin
+          cp -r build/linux/x64/release/bundle/* AppDir/usr/bin/
+          cp linux/packaging/AppRun AppDir/AppRun
+          chmod +x AppDir/AppRun
+          cp linux/packaging/android_finder.desktop AppDir/android_finder.desktop
+          cp macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_256.png \
+            AppDir/android_finder.png
+
+          # Fetch appimagetool (run without FUSE)
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+
+          ARCH=x86_64 ./appimagetool-x86_64.AppImage --appimage-extract-and-run \
+            AppDir "AndroidFinder-${VERSION}-linux-x86_64.AppImage"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            AndroidFinder-*-linux-x86_64.AppImage
+            AndroidFinder-*-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Publish: gather all artifacts into one GitHub Release
+  # ---------------------------------------------------------------------------
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Resolve version
+        id: ver
+        run: echo "version=${{ inputs.version || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: AndroidFinder ${{ github.ref_name || inputs.version }}
-          tag_name: ${{ github.ref_name || inputs.version }}
-          files: ${{ env.DMG_NAME }}
+          name: AndroidFinder ${{ steps.ver.outputs.version }}
+          tag_name: ${{ steps.ver.outputs.version }}
+          files: artifacts/**/*
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref_name || inputs.version, '-') }}
+          prerelease: ${{ contains(steps.ver.outputs.version, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

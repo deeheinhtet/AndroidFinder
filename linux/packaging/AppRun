@@ -1,0 +1,7 @@
+#!/bin/bash
+# AppImage entrypoint for AndroidFinder.
+# The Flutter linux bundle (executable + lib/ + data/) is placed under
+# usr/bin/ inside the AppDir; the binary expects lib/ and data/ next to it.
+HERE="$(dirname "$(readlink -f "${0}")")"
+export LD_LIBRARY_PATH="${HERE}/usr/bin/lib:${LD_LIBRARY_PATH}"
+exec "${HERE}/usr/bin/android_finder" "$@"
