@@ -6,6 +6,12 @@
   #define MyAppVersion "0.0.0"
 #endif
 
+; Repo root, passed from the workflow (/DRepoRoot=...). Falls back to two
+; levels up from this script (windows/packaging/ -> repo root) for local runs.
+#ifndef RepoRoot
+  #define RepoRoot SourcePath + "..\.."
+#endif
+
 #define MyAppName "AndroidFinder"
 #define MyAppExeName "android_finder.exe"
 #define MyAppPublisher "com.dee.andriod.finder"
@@ -18,6 +24,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
+SourceDir={#RepoRoot}
 OutputDir=installer_output
 OutputBaseFilename=AndroidFinder-Setup
 Compression=lzma2

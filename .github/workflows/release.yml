@@ -116,9 +116,12 @@ jobs:
         shell: pwsh
         run: |
           $num = "${{ steps.ver.outputs.numeric }}"
-          & "iscc" "/DMyAppVersion=$num" "windows/packaging/installer.iss"
           $ver = "${{ steps.ver.outputs.version }}"
-          Move-Item "windows/packaging/installer_output/AndroidFinder-Setup.exe" `
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = (Get-Command iscc).Source }
+          & "$iscc" "/DMyAppVersion=$num" "/DRepoRoot=$($pwd.Path)" "windows/packaging/installer.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          Move-Item "installer_output/AndroidFinder-Setup.exe" `
             "AndroidFinder-$ver-windows-setup.exe"
 
       - name: Upload artifact
